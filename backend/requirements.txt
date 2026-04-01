@@ -1,6 +1,6 @@
 fastapi
 uvicorn[standard]
-supabase==2.9.1
-python-dotenv
-psycopg2-binary
 sqlalchemy
+python-dotenv
+httpx
+sentry-sdk[fastapi]

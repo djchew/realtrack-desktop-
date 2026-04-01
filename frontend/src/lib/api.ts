@@ -6,8 +6,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     ...init,
   });
   if (!res.ok) {
-    const err = await res.text();
-    throw new Error(err || res.statusText);
+    // FastAPI error bodies are { detail: string }
+    let message = res.statusText;
+    try {
+      const body = await res.json();
+      message = body.detail ?? body.message ?? message;
+    } catch {
+      message = (await res.text().catch(() => "")) || message;
+    }
+    throw new Error(message);
   }
   if (res.status === 204) return undefined as T;
   return res.json();
@@ -76,7 +83,38 @@ export const deleteEvent = (id: string) =>
 // ── Summary ──────────────────────────────────────────────────
 export const getSummary = () => request<Summary>("/summary");
 export const getCashFlow = () => request<CashFlowRow[]>("/summary/cash-flow");
-export const getAnalyticsData = () => request<{ mortgages: Mortgage[]; tenants: Tenant[] }>("/summary/analytics");
+export const getAnalyticsData = () =>
+  request<{ mortgages: Mortgage[]; tenants: Tenant[] }>("/summary/analytics");
+
+// ── Maintenance ──────────────────────────────────────────────
+export const getMaintenance = (propertyId?: string, status?: string) => {
+  const params = new URLSearchParams();
+  if (propertyId) params.set("property_id", propertyId);
+  if (status) params.set("status", status);
+  const qs = params.toString();
+  return request<MaintenanceRequest[]>(`/maintenance${qs ? `?${qs}` : ""}`);
+};
+export const createMaintenance = (data: Partial<MaintenanceRequest>) =>
+  request<MaintenanceRequest>("/maintenance", { method: "POST", body: JSON.stringify(data) });
+export const updateMaintenance = (id: string, data: Partial<MaintenanceRequest>) =>
+  request<MaintenanceRequest>(`/maintenance/${id}`, { method: "PUT", body: JSON.stringify(data) });
+export const deleteMaintenance = (id: string) =>
+  request<void>(`/maintenance/${id}`, { method: "DELETE" });
+
+// ── Watchlist ─────────────────────────────────────────────────
+export const getWatchlist = () => request<WatchlistItem[]>("/watchlist");
+export const createWatchlistItem = (data: Partial<WatchlistItem>) =>
+  request<WatchlistItem>("/watchlist", { method: "POST", body: JSON.stringify(data) });
+export const updateWatchlistItem = (id: string, data: Partial<WatchlistItem>) =>
+  request<WatchlistItem>(`/watchlist/${id}`, { method: "PUT", body: JSON.stringify(data) });
+export const deleteWatchlistItem = (id: string) =>
+  request<void>(`/watchlist/${id}`, { method: "DELETE" });
+export const refreshWatchlistPreview = (id: string) =>
+  request<WatchlistItem>(`/watchlist/${id}/refresh-preview`, { method: "POST" });
+
+// ── Demo ─────────────────────────────────────────────────────
+export const seedDemo  = () => request<{ ok: boolean }>("/demo/seed",  { method: "POST" });
+export const clearDemo = () => request<{ ok: boolean }>("/demo/clear", { method: "DELETE" });
 
 // ── Types ────────────────────────────────────────────────────
 export interface Property {
@@ -164,6 +202,42 @@ export interface Event {
   status: string;
   notes?: string;
   properties?: { name: string; address: string };
+}
+
+export interface MaintenanceRequest {
+  id: string;
+  property_id: string;
+  title: string;
+  category: string;
+  priority: string;
+  status: string;
+  reported_date?: string;
+  completed_date?: string;
+  cost?: number;
+  vendor?: string;
+  notes?: string;
+  properties?: { name: string };
+}
+
+export interface WatchlistItem {
+  id: string;
+  listing_url?: string;
+  address: string;
+  suburb?: string;
+  state?: string;
+  asking_price?: number;
+  bedrooms?: number;
+  bathrooms?: number;
+  parking?: number;
+  land_size?: number;
+  property_type?: string;
+  status: string;
+  notes?: string;
+  og_title?: string;
+  og_image?: string;
+  og_description?: string;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface ExpiringLease {

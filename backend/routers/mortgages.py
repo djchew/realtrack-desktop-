@@ -1,8 +1,12 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import Optional
 from datetime import date
-from database.connection import supabase
+from sqlalchemy.orm import Session
+
+from database.connection import get_db
+from database.models import Mortgage
+from database.utils import serialize
 
 router = APIRouter()
 
@@ -32,36 +36,44 @@ class MortgageUpdate(BaseModel):
 
 
 @router.get("/properties/{property_id}/mortgages")
-def get_mortgages(property_id: str):
-    result = (
-        supabase.table("mortgages")
-        .select("*")
-        .eq("property_id", property_id)
-        .order("is_primary", desc=True)
-        .execute()
+def get_mortgages(property_id: str, db: Session = Depends(get_db)):
+    mortgages = (
+        db.query(Mortgage)
+        .filter(Mortgage.property_id == property_id)
+        .order_by(Mortgage.is_primary.desc())
+        .all()
     )
-    return result.data
+    return [serialize(m) for m in mortgages]
 
 
 @router.post("/mortgages", status_code=201)
-def create_mortgage(body: MortgageCreate):
-    data = body.model_dump(exclude_none=True)
-    data["start_date"] = str(data["start_date"])
-    result = supabase.table("mortgages").insert(data).execute()
-    return result.data[0]
+def create_mortgage(body: MortgageCreate, db: Session = Depends(get_db)):
+    mortgage = Mortgage(**body.model_dump(exclude_none=True))
+    db.add(mortgage)
+    db.commit()
+    db.refresh(mortgage)
+    return serialize(mortgage)
 
 
 @router.put("/mortgages/{id}")
-def update_mortgage(id: str, body: MortgageUpdate):
+def update_mortgage(id: str, body: MortgageUpdate, db: Session = Depends(get_db)):
     data = body.model_dump(exclude_none=True)
     if not data:
         raise HTTPException(status_code=400, detail="No fields to update")
-    result = supabase.table("mortgages").update(data).eq("id", id).execute()
-    if not result.data:
+    mortgage = db.query(Mortgage).filter(Mortgage.id == id).first()
+    if not mortgage:
         raise HTTPException(status_code=404, detail="Mortgage not found")
-    return result.data[0]
+    for key, val in data.items():
+        setattr(mortgage, key, val)
+    db.commit()
+    db.refresh(mortgage)
+    return serialize(mortgage)
 
 
 @router.delete("/mortgages/{id}", status_code=204)
-def delete_mortgage(id: str):
-    supabase.table("mortgages").delete().eq("id", id).execute()
+def delete_mortgage(id: str, db: Session = Depends(get_db)):
+    mortgage = db.query(Mortgage).filter(Mortgage.id == id).first()
+    if not mortgage:
+        raise HTTPException(status_code=404, detail="Mortgage not found")
+    db.delete(mortgage)
+    db.commit()

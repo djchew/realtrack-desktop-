@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev --webpack",
     "build": "next build",
     "start": "next start",
     "lint": "eslint"
@@ -13,6 +13,7 @@
     "@radix-ui/react-label": "^2.1.8",
     "@radix-ui/react-select": "^2.2.6",
     "@radix-ui/react-tabs": "^1.1.13",
+    "@sentry/nextjs": "^10",
     "@types/leaflet": "^1.9.21",
     "leaflet": "^1.9.4",
     "lucide-react": "^1.7.0",

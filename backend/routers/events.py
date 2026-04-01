@@ -1,8 +1,12 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import Optional
 from datetime import date
-from database.connection import supabase
+from sqlalchemy.orm import Session, joinedload
+
+from database.connection import get_db
+from database.models import Event
+from database.utils import serialize
 
 router = APIRouter()
 
@@ -25,44 +29,58 @@ class EventUpdate(BaseModel):
 
 
 @router.get("/events")
-def get_events(upcoming: Optional[int] = None):
-    query = supabase.table("events").select("*, properties(name, address)")
+def get_events(upcoming: Optional[int] = None, db: Session = Depends(get_db)):
+    query = db.query(Event).options(joinedload(Event.property))
     if upcoming:
-        today = str(date.today())
         query = (
             query
-            .gte("due_date", today)
-            .eq("status", "pending")
-            .order("due_date")
+            .filter(Event.due_date >= date.today(), Event.status == "pending")
+            .order_by(Event.due_date)
             .limit(upcoming)
         )
     else:
-        query = query.order("due_date")
-    result = query.execute()
-    return result.data
+        query = query.order_by(Event.due_date)
+
+    events = query.all()
+    result = []
+    for e in events:
+        d = serialize(e)
+        d["properties"] = (
+            {"name": e.property.name, "address": e.property.address}
+            if e.property else None
+        )
+        result.append(d)
+    return result
 
 
 @router.post("/events", status_code=201)
-def create_event(body: EventCreate):
-    data = body.model_dump(exclude_none=True)
-    data["due_date"] = str(data["due_date"])
-    result = supabase.table("events").insert(data).execute()
-    return result.data[0]
+def create_event(body: EventCreate, db: Session = Depends(get_db)):
+    event = Event(**body.model_dump(exclude_none=True))
+    db.add(event)
+    db.commit()
+    db.refresh(event)
+    return serialize(event)
 
 
 @router.put("/events/{id}")
-def update_event(id: str, body: EventUpdate):
+def update_event(id: str, body: EventUpdate, db: Session = Depends(get_db)):
     data = body.model_dump(exclude_none=True)
-    if "due_date" in data:
-        data["due_date"] = str(data["due_date"])
     if not data:
         raise HTTPException(status_code=400, detail="No fields to update")
-    result = supabase.table("events").update(data).eq("id", id).execute()
-    if not result.data:
+    event = db.query(Event).filter(Event.id == id).first()
+    if not event:
         raise HTTPException(status_code=404, detail="Event not found")
-    return result.data[0]
+    for key, val in data.items():
+        setattr(event, key, val)
+    db.commit()
+    db.refresh(event)
+    return serialize(event)
 
 
 @router.delete("/events/{id}", status_code=204)
-def delete_event(id: str):
-    supabase.table("events").delete().eq("id", id).execute()
+def delete_event(id: str, db: Session = Depends(get_db)):
+    event = db.query(Event).filter(Event.id == id).first()
+    if not event:
+        raise HTTPException(status_code=404, detail="Event not found")
+    db.delete(event)
+    db.commit()

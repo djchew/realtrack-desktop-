@@ -20,6 +20,7 @@ interface Suggestion {
   address: {
     house_number?: string;
     road?: string;
+    suburb?: string;
     city?: string;
     town?: string;
     village?: string;
@@ -27,6 +28,17 @@ interface Suggestion {
     postcode?: string;
   };
 }
+
+const AU_STATE_ABBR: Record<string, string> = {
+  "New South Wales":              "NSW",
+  "Victoria":                     "VIC",
+  "Queensland":                   "QLD",
+  "South Australia":              "SA",
+  "Western Australia":            "WA",
+  "Tasmania":                     "TAS",
+  "Northern Territory":           "NT",
+  "Australian Capital Territory": "ACT",
+};
 
 const inputClass = "w-full border border-stone-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-amber-400 bg-white";
 
@@ -55,9 +67,9 @@ export default function PropertyForm({ property }: { property?: Property }) {
 
   // Address autocomplete state
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
-  const [showSuggestions, setShowSuggestions] = useState(false);
   const [addressQuery, setAddressQuery] = useState(property?.address ?? "");
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const latestQueryRef = useRef<string>("");
   const wrapperRef = useRef<HTMLDivElement>(null);
 
   function set(field: keyof typeof form, value: string) {
@@ -68,31 +80,30 @@ export default function PropertyForm({ property }: { property?: Property }) {
   useEffect(() => {
     function handleClick(e: MouseEvent) {
       if (wrapperRef.current && !wrapperRef.current.contains(e.target as Node)) {
-        setShowSuggestions(false);
+        setSuggestions([]);
       }
     }
     document.addEventListener("mousedown", handleClick);
     return () => document.removeEventListener("mousedown", handleClick);
   }, []);
 
-  // Debounced Nominatim search
   function handleAddressInput(value: string) {
     setAddressQuery(value);
     set("address", value);
-    setSuggestions([]);
+    latestQueryRef.current = value;
 
     if (debounceRef.current) clearTimeout(debounceRef.current);
-    if (value.length < 5) { setShowSuggestions(false); return; }
+    if (value.length < 5) { setSuggestions([]); return; }
 
     debounceRef.current = setTimeout(async () => {
       try {
-        const res = await fetch(
-          `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(value)}&format=json&addressdetails=1&limit=5&countrycodes=au`,
-          { headers: { "Accept-Language": "en" } }
-        );
+        const base = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api";
+        const res = await fetch(`${base}/geocode?q=${encodeURIComponent(value)}`);
         const data: Suggestion[] = await res.json();
-        setSuggestions(data);
-        setShowSuggestions(data.length > 0);
+        // Discard if a newer query has already been typed
+        if (latestQueryRef.current === value) {
+          setSuggestions(data);
+        }
       } catch {
         // silently fail — user can still type manually
       }
@@ -100,24 +111,16 @@ export default function PropertyForm({ property }: { property?: Property }) {
   }
 
   function selectSuggestion(s: Suggestion) {
-    const { house_number, road, city, town, village, state, postcode } = s.address;
+    const { house_number, road, suburb, city, town, village, state, postcode } = s.address;
     const street = [house_number, road].filter(Boolean).join(" ");
-    const resolvedCity = city ?? town ?? village ?? "";
-    const resolvedState = state ?? "";
+    // Australian addresses use suburb as the locality, fall back to city/town/village
+    const resolvedCity = suburb ?? city ?? town ?? village ?? "";
+    const resolvedState = AU_STATE_ABBR[state ?? ""] ?? state ?? "";
     const resolvedZip = postcode?.split("-")[0] ?? "";
 
     setAddressQuery(street);
-    setForm((f) => ({
-      ...f,
-      address: street,
-      city: resolvedCity,
-      state: resolvedState.length > 2
-        ? resolvedState // Nominatim sometimes returns full state name
-        : resolvedState,
-      zip: resolvedZip,
-    }));
+    setForm((f) => ({ ...f, address: street, city: resolvedCity, state: resolvedState, zip: resolvedZip }));
     setSuggestions([]);
-    setShowSuggestions(false);
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -208,12 +211,11 @@ export default function PropertyForm({ property }: { property?: Property }) {
                 required
                 value={addressQuery}
                 onChange={(e) => handleAddressInput(e.target.value)}
-                onFocus={() => suggestions.length > 0 && setShowSuggestions(true)}
                 placeholder="Start typing an address…"
                 autoComplete="off"
                 className={inputClass}
               />
-              {showSuggestions && (
+              {suggestions.length > 0 && (
                 <ul className="absolute z-50 mt-1 w-full bg-white border border-stone-200 rounded-xl shadow-lg overflow-hidden">
                   {suggestions.map((s, i) => (
                     <li
@@ -237,7 +239,7 @@ export default function PropertyForm({ property }: { property?: Property }) {
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-xs font-medium text-stone-500 mb-1">State *</label>
-              <input required value={form.state} onChange={(e) => set("state", e.target.value)} maxLength={2} placeholder="TX" className={inputClass} />
+              <input required value={form.state} onChange={(e) => set("state", e.target.value)} maxLength={3} placeholder="VIC" className={inputClass} />
             </div>
             <div>
               <label className="block text-xs font-medium text-stone-500 mb-1">ZIP *</label>

@@ -1,0 +1,45 @@
+{
+  "appId": "au.com.realtrack.desktop",
+  "productName": "RealTrack",
+  "copyright": "Copyright © 2025",
+  "directories": {
+    "output": "dist"
+  },
+  "files": [
+    "electron/**/*",
+    "node_modules/**/*",
+    "package.json"
+  ],
+  "extraResources": [
+    {
+      "from": "frontend/.next/standalone",
+      "to": "frontend",
+      "filter": ["**/*"]
+    },
+    {
+      "from": "frontend/.next/static",
+      "to": "frontend/.next/static",
+      "filter": ["**/*"]
+    },
+    {
+      "from": "frontend/public",
+      "to": "frontend/public",
+      "filter": ["**/*"]
+    },
+    {
+      "from": "dist-backend/main.exe",
+      "to": "backend/main.exe"
+    }
+  ],
+  "win": {
+    "target": "nsis",
+    "icon": "electron/assets/icon.ico"
+  },
+  "nsis": {
+    "oneClick": false,
+    "allowToChangeInstallationDirectory": true,
+    "createDesktopShortcut": true,
+    "createStartMenuShortcut": true,
+    "shortcutName": "RealTrack"
+  }
+}

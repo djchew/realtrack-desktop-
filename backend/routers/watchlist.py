@@ -1,9 +1,13 @@
 import re
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import Optional
-from database.connection import supabase
+from sqlalchemy.orm import Session
+
+from database.connection import get_db
+from database.models import WatchlistItem
+from database.utils import serialize
 
 router = APIRouter()
 
@@ -15,7 +19,6 @@ HEADERS = {
 
 
 def _extract_og(html: str, prop: str) -> Optional[str]:
-    # Matches both property="og:x" content="..." and content="..." property="og:x"
     patterns = [
         rf'<meta[^>]+property=["\']og:{prop}["\'][^>]+content=["\']([^"\']+)["\']',
         rf'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:{prop}["\']',
@@ -30,68 +33,83 @@ def _extract_og(html: str, prop: str) -> Optional[str]:
 def fetch_og_data(url: str) -> dict:
     try:
         r = httpx.get(url, headers=HEADERS, follow_redirects=True, timeout=10)
+        r.raise_for_status()
         html = r.text
         return {
-            "og_title": _extract_og(html, "title"),
-            "og_image": _extract_og(html, "image"),
+            "og_title":       _extract_og(html, "title"),
+            "og_image":       _extract_og(html, "image"),
             "og_description": _extract_og(html, "description"),
         }
-    except Exception:
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=502, detail=f"Listing URL returned {e.response.status_code}")
+    except httpx.RequestError:
+        # Network error — silently return empty rather than failing the whole request
         return {"og_title": None, "og_image": None, "og_description": None}
 
 
 class WatchlistIn(BaseModel):
-    listing_url: Optional[str] = None
-    address: str
-    suburb: Optional[str] = None
-    state: Optional[str] = None
-    asking_price: Optional[float] = None
-    bedrooms: Optional[int] = None
-    bathrooms: Optional[float] = None
-    parking: Optional[int] = None
-    land_size: Optional[int] = None
-    property_type: Optional[str] = None
-    status: str = "watching"
-    notes: Optional[str] = None
+    listing_url:   Optional[str]   = None
+    address:       str
+    suburb:        Optional[str]   = None
+    state:         Optional[str]   = None
+    asking_price:  Optional[float] = None
+    bedrooms:      Optional[int]   = None
+    bathrooms:     Optional[float] = None
+    parking:       Optional[int]   = None
+    land_size:     Optional[int]   = None
+    property_type: Optional[str]   = None
+    status:        str             = "watching"
+    notes:         Optional[str]   = None
 
 
 @router.get("/watchlist")
-def list_watchlist():
-    return supabase.table("watchlist").select("*").order("created_at", desc=True).execute().data or []
+def list_watchlist(db: Session = Depends(get_db)):
+    items = db.query(WatchlistItem).order_by(WatchlistItem.created_at.desc()).all()
+    return [serialize(i) for i in items]
 
 
-@router.post("/watchlist")
-def create_watchlist(data: WatchlistIn):
+@router.post("/watchlist", status_code=201)
+def create_watchlist(data: WatchlistIn, db: Session = Depends(get_db)):
     payload = data.model_dump(exclude_none=True)
     if data.listing_url:
         og = fetch_og_data(data.listing_url)
         payload.update({k: v for k, v in og.items() if v})
-    result = supabase.table("watchlist").insert(payload).execute()
-    if not result.data:
-        raise HTTPException(status_code=400, detail="Failed to create entry")
-    return result.data[0]
+    item = WatchlistItem(**payload)
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    return serialize(item)
 
 
 @router.put("/watchlist/{item_id}")
-def update_watchlist(item_id: str, data: WatchlistIn):
-    payload = data.model_dump(exclude_none=True)
-    result = supabase.table("watchlist").update(payload).eq("id", item_id).execute()
-    if not result.data:
+def update_watchlist(item_id: str, data: WatchlistIn, db: Session = Depends(get_db)):
+    item = db.query(WatchlistItem).filter(WatchlistItem.id == item_id).first()
+    if not item:
         raise HTTPException(status_code=404, detail="Not found")
-    return result.data[0]
+    for key, val in data.model_dump(exclude_none=True).items():
+        setattr(item, key, val)
+    db.commit()
+    db.refresh(item)
+    return serialize(item)
 
 
-@router.delete("/watchlist/{item_id}")
-def delete_watchlist(item_id: str):
-    supabase.table("watchlist").delete().eq("id", item_id).execute()
-    return {"ok": True}
+@router.delete("/watchlist/{item_id}", status_code=204)
+def delete_watchlist(item_id: str, db: Session = Depends(get_db)):
+    item = db.query(WatchlistItem).filter(WatchlistItem.id == item_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Not found")
+    db.delete(item)
+    db.commit()
 
 
 @router.post("/watchlist/{item_id}/refresh-preview")
-def refresh_preview(item_id: str):
-    row = supabase.table("watchlist").select("listing_url").eq("id", item_id).execute().data
-    if not row or not row[0].get("listing_url"):
+def refresh_preview(item_id: str, db: Session = Depends(get_db)):
+    item = db.query(WatchlistItem).filter(WatchlistItem.id == item_id).first()
+    if not item or not item.listing_url:
         raise HTTPException(status_code=404, detail="No URL to fetch")
-    og = fetch_og_data(row[0]["listing_url"])
-    result = supabase.table("watchlist").update(og).eq("id", item_id).execute()
-    return result.data[0]
+    og = fetch_og_data(item.listing_url)
+    for key, val in og.items():
+        setattr(item, key, val)
+    db.commit()
+    db.refresh(item)
+    return serialize(item)

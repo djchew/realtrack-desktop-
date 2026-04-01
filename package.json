@@ -1,13 +1,24 @@
 {
-  "name": "real-estate-tracker",
+  "name": "realtrack-desktop",
+  "version": "1.0.0",
   "private": true,
-  "workspaces": ["frontend"],
+  "main": "electron/main.js",
+  "workspaces": [
+    "frontend"
+  ],
   "scripts": {
     "dev": "concurrently --kill-others --names \"API,WEB\" --prefix-colors \"cyan,magenta\" \"npm run dev:api\" \"npm run dev:web\"",
     "dev:api": "cd backend && python -m uvicorn main:app --reload",
-    "dev:web": "npm run dev --workspace=frontend"
+    "dev:web": "npm run dev --workspace=frontend",
+    "dev:electron": "concurrently --kill-others --names \"API,WEB,ELECTRON\" --prefix-colors \"cyan,magenta,yellow\" \"npm run dev:api\" \"npm run dev:web\" \"wait-on http-get://localhost:3000 http-get://localhost:8000 && electron .\"",
+    "build:frontend": "npm run build --workspace=frontend",
+    "build:backend": "cd backend && pyinstaller main.py --onefile --name main --distpath ../dist-backend",
+    "dist": "npm run build:frontend && npm run build:backend && electron-builder"
   },
   "devDependencies": {
-    "concurrently": "^9.0.0"
+    "concurrently": "^9.0.0",
+    "electron": "^41.1.1",
+    "electron-builder": "^26.8.1",
+    "wait-on": "^8.0.0"
   }
 }

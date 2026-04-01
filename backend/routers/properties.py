@@ -1,8 +1,12 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
 from typing import Optional
 from datetime import date
-from database.connection import supabase
+from sqlalchemy.orm import Session
+
+from database.connection import get_db
+from database.models import Property
+from database.utils import serialize
 
 router = APIRouter()
 
@@ -44,41 +48,47 @@ class PropertyUpdate(BaseModel):
 
 
 @router.get("/properties")
-def get_properties():
-    result = supabase.table("properties").select("*").order("created_at", desc=True).execute()
-    return result.data
+def get_properties(db: Session = Depends(get_db)):
+    props = db.query(Property).order_by(Property.created_at.desc()).all()
+    return [serialize(p) for p in props]
 
 
 @router.get("/properties/{id}")
-def get_property(id: str):
-    result = supabase.table("properties").select("*").eq("id", id).single().execute()
-    if not result.data:
+def get_property(id: str, db: Session = Depends(get_db)):
+    prop = db.query(Property).filter(Property.id == id).first()
+    if not prop:
         raise HTTPException(status_code=404, detail="Property not found")
-    return result.data
+    return serialize(prop)
 
 
 @router.post("/properties", status_code=201)
-def create_property(body: PropertyCreate):
-    data = body.model_dump(exclude_none=True)
-    if "purchase_date" in data and data["purchase_date"]:
-        data["purchase_date"] = str(data["purchase_date"])
-    result = supabase.table("properties").insert(data).execute()
-    return result.data[0]
+def create_property(body: PropertyCreate, db: Session = Depends(get_db)):
+    prop = Property(**body.model_dump(exclude_none=True))
+    db.add(prop)
+    db.commit()
+    db.refresh(prop)
+    return serialize(prop)
 
 
 @router.put("/properties/{id}")
-def update_property(id: str, body: PropertyUpdate):
+def update_property(id: str, body: PropertyUpdate, db: Session = Depends(get_db)):
     data = body.model_dump(exclude_none=True)
-    if "purchase_date" in data and data["purchase_date"]:
-        data["purchase_date"] = str(data["purchase_date"])
     if not data:
         raise HTTPException(status_code=400, detail="No fields to update")
-    result = supabase.table("properties").update(data).eq("id", id).execute()
-    if not result.data:
+    prop = db.query(Property).filter(Property.id == id).first()
+    if not prop:
         raise HTTPException(status_code=404, detail="Property not found")
-    return result.data[0]
+    for key, val in data.items():
+        setattr(prop, key, val)
+    db.commit()
+    db.refresh(prop)
+    return serialize(prop)
 
 
 @router.delete("/properties/{id}", status_code=204)
-def delete_property(id: str):
-    supabase.table("properties").delete().eq("id", id).execute()
+def delete_property(id: str, db: Session = Depends(get_db)):
+    prop = db.query(Property).filter(Property.id == id).first()
+    if not prop:
+        raise HTTPException(status_code=404, detail="Property not found")
+    db.delete(prop)
+    db.commit()
